@@ -1,0 +1,37 @@
+{
+  "name": "multiver-project",
+  "version": "1.0.0",
+  "lockfileVersion": 2,
+  "packages": {
+    "": {
+      "name": "multiver-project",
+      "version": "1.0.0",
+      "dependencies": {
+        "left": "^1.0.0",
+        "right": "^1.0.0"
+      }
+    },
+    "node_modules/left": {
+      "name": "left",
+      "version": "1.0.0",
+      "dependencies": {
+        "foo": "^1.0.0"
+      }
+    },
+    "node_modules/right": {
+      "name": "right",
+      "version": "1.0.0",
+      "dependencies": {
+        "foo": "^2.0.0"
+      }
+    },
+    "node_modules/left/node_modules/foo": {
+      "name": "foo",
+      "version": "1.0.0"
+    },
+    "node_modules/right/node_modules/foo": {
+      "name": "foo",
+      "version": "2.0.0"
+    }
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "name": "example-project",
+  "version": "1.0.0",
+  "lockfileVersion": 2,
+  "packages": {
+    "": {
+      "name": "example-project",
+      "version": "1.0.0",
+      "dependencies": {
+        "express": "^4.17.1",
+        "lodash": "^4.17.20"
+      },
+      "devDependencies": {
+        "mocha": "^9.0.0"
+      },
+      "optionalDependencies": {
+        "optional-lib": "^1.0.0"
+      }
+    },
+    "node_modules/express": {
+      "name": "express",
+      "version": "4.17.1",
+      "dependencies": {
+        "debug": "^2.6.9"
+      }
+    },
+    "node_modules/express/node_modules/debug": {
+      "name": "debug",
+      "version": "2.6.9"
+    },
+    "node_modules/lodash": {
+      "name": "lodash",
+      "version": "4.17.20"
+    },
+    "node_modules/lodash/node_modules/debug": {
+      "name": "debug",
+      "version": "3.1.0"
+    },
+    "node_modules/mocha": {
+      "name": "mocha",
+      "version": "9.0.0",
+      "dev": true
+    },
+    "node_modules/optional-lib": {
+      "name": "optional-lib",
+      "version": "1.0.0",
+      "optional": true
+    },
+    "node_modules/missing-parent": {
+      "name": "missing-parent",
+      "version": "1.2.3",
+      "dependencies": {
+        "nonexistent": "^0.0.1"
+      }
+    }
+  }
+}

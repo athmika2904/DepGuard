@@ -1,0 +1,22 @@
+{
+  "name": "cycleproj",
+  "version": "1.0.0",
+  "lockfileVersion": 2,
+  "packages": {
+    "": {
+      "name": "cycleproj",
+      "version": "1.0.0",
+      "dependencies": {"a": "^1.0.0"}
+    },
+    "node_modules/a": {
+      "name": "a",
+      "version": "1.0.0",
+      "dependencies": {"b": "^1.0.0"}
+    },
+    "node_modules/a/node_modules/b": {
+      "name": "b",
+      "version": "1.0.0",
+      "dependencies": {"a": "^1.0.0"}
+    }
+  }
+}

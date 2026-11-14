@@ -1,0 +1,34 @@
+{
+  "name": "hoisted-project",
+  "version": "1.0.0",
+  "lockfileVersion": 2,
+  "packages": {
+    "": {
+      "name": "hoisted-project",
+      "version": "1.0.0",
+      "dependencies": {
+        "left": "^1.0.0",
+        "right": "^1.0.0",
+        "shared": "^1.0.0"
+      }
+    },
+    "node_modules/left": {
+      "name": "left",
+      "version": "1.0.0",
+      "dependencies": {
+        "shared": "^1.0.0"
+      }
+    },
+    "node_modules/right": {
+      "name": "right",
+      "version": "1.0.0",
+      "dependencies": {
+        "shared": "^1.0.0"
+      }
+    },
+    "node_modules/shared": {
+      "name": "shared",
+      "version": "1.0.0"
+    }
+  }
+}
