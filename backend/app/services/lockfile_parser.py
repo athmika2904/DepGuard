@@ -68,6 +68,41 @@ def parse_packages(packages: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     for path, meta in packages.items():
         if not isinstance(meta, dict):
             continue
+        # Derive a fallback name from the installation path when "name" is missing.
+        # npm lockfile paths always use forward slashes.
+        name = meta.get("name")
+        version = meta.get("version")
+        if not name:
+            # Path may be "" (root) or something like "node_modules/foo" or "node_modules/@scope/foo"
+            if path == "":
+                name = "<root>"
+            else:
+                # Strip leading "node_modules/" and any intermediate "node_modules/" segments.
+                # The last segment is the package name (including scope prefix if present).
+                parts = [p for p in path.split('/') if p]
+                # Find the last part after a "node_modules" component.
+                name_parts = []
+                for i, part in enumerate(parts):
+                    if part == "node_modules" and i + 1 < len(parts):
+                        name_parts = parts[i + 1 :]
+                if not name_parts:
+                    # Fallback to the whole last part.
+                    name = parts[-1]
+                else:
+                    name = "/".join(name_parts)
+        if not version:
+            version = ""
+        normalised[path] = {
+            "name": name,
+            "version": version,
+            "dependencies": meta.get("dependencies", {}),
+            "devDependencies": meta.get("devDependencies", {}),
+            "optionalDependencies": meta.get("optionalDependencies", {}),
+            "peerDependencies": meta.get("peerDependencies", {}),
+        }
+
+        if not isinstance(meta, dict):
+            continue
         name = meta.get("name")
         version = meta.get("version")
         if not name or not version:

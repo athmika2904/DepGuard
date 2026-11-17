@@ -113,7 +113,7 @@ def test_peer_dependency_unresolved():
             }
         }
     }
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.json') as tf:
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.json', mode='w') as tf:
         json.dump(fixture, tf)
         tf_path = tf.name
     g = build_dependency_graph(tf_path)
