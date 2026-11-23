@@ -1,193 +1,165 @@
-"""Dependency Graph Engine (npm v2/v3 with proper scope handling & edge types)
 
-This module parses the ``packages`` section of a ``package-lock.json`` (npm
-v2/v3) and builds a directed graph that respects npm's *nearest‑ancestor*
-resolution algorithm.  It also records the type of each dependency edge
-(``prod``, ``dev``, ``optional`` or ``peer``) and correctly propagates dependency
-scopes to transitive children, re‑processing descendants when new scopes are
-added.
+"""
+Dependency Graph Engine for npm package-lock.json v2/v3.
+
+Builds a directed dependency graph using npm's nearest-ancestor
+module resolution algorithm.
+
+Features:
+- Direct and transitive dependency identification.
+- Dependency edge types: prod, dev, optional, peer.
+- Dependency scope propagation.
+- Support for hoisted and nested dependencies.
+- Multiple installation paths for the same package.
+- Root-to-package dependency path tracking.
 """
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
-from typing import Dict, List, Set, Any, Tuple
+from typing import Any
 
 import networkx as nx
 
-from .lockfile_parser import parse_lockfile, LockfileParseError
+from .lockfile_parser import parse_lockfile
 
-# ---------------------------------------------------------------------------
-# Types
-# ---------------------------------------------------------------------------
-NodeAttrs = Dict[str, Any]
+
+NodeAttrs = dict[str, Any]
 Graph = nx.DiGraph
 
+
 # ---------------------------------------------------------------------------
-# Helper utilities
+# Direct dependency detection
 # ---------------------------------------------------------------------------
 
 def _determine_direct_paths_and_scopes(
-    packages: Dict[str, Dict[str, Any]],
-) -> Tuple[Set[str], Dict[str, Set[str]]]:
-    """Return direct install paths and a mapping ``install_path → scopes``.
-
-    The root entry (key "") contains the four dependency sections. Any package
-    listed there is a *direct* dependency. For each direct package we compute the
-    exact install path (e.g. ``node_modules/foo`` or ``node_modules/@scope/foo``)
-    and record the scopes (``prod``, ``dev``, ``optional``, ``peer``) in which it
-    was declared.
+    packages: dict[str, dict[str, Any]],
+) -> tuple[set[str], dict[str, set[str]]]:
     """
+    Identify direct dependencies declared in the root package.
+
+    Returns:
+        direct_paths:
+            Exact installation paths of direct dependencies.
+
+        path_to_scopes:
+            Mapping of installation path to its declared scopes.
+    """
+
     root_meta = packages.get("", {})
-    direct_paths: Set[str] = set()
-    path_to_scopes: Dict[str, Set[str]] = {}
-    for section, scope in (
+
+    direct_paths: set[str] = set()
+    path_to_scopes: dict[str, set[str]] = {}
+
+    sections = (
         ("dependencies", "prod"),
         ("devDependencies", "dev"),
         ("optionalDependencies", "optional"),
         ("peerDependencies", "peer"),
-    ):
+    )
+
+    for section, scope in sections:
         for name in root_meta.get(section, {}):
-            # Compute the exact install path for this direct dependency.
-            install_path = f"node_modules/{name}" if name else ""
-            if install_path:
-                direct_paths.add(install_path)
-                path_to_scopes.setdefault(install_path, set()).add(scope)
+            install_path = f"node_modules/{name}"
+
+            direct_paths.add(install_path)
+            path_to_scopes.setdefault(install_path, set()).add(scope)
+
     return direct_paths, path_to_scopes
 
-    """Return direct install paths and a mapping ``package_name → scopes``.
 
-    The root entry (key ``""``) contains the four dependency sections.  Any
-    package listed there is considered a *direct* dependency.  The function
-    collects the declared scopes (``prod``, ``dev``, ``optional``, ``peer``) for
-    each direct package name and returns both the set of install paths that
-    correspond to those names **and** the mapping.
+def _scope_for_package(
+    path: str,
+    packages: dict[str, dict[str, Any]],
+    path_to_scopes: dict[str, set[str]],
+) -> set[str]:
     """
-    root_meta = packages.get("", {})
-    direct_names: Set[str] = set()
-    name_to_scopes: Dict[str, Set[str]] = {}
-    for section, scope in (
-        ("dependencies", "prod"),
-        ("devDependencies", "dev"),
-        ("optionalDependencies", "optional"),
-        ("peerDependencies", "peer"),
-    ):
-        for name in root_meta.get(section, {}):
-            direct_names.add(name)
-            name_to_scopes.setdefault(name, set()).add(scope)
-    # Translate names → install paths that actually exist.
-    direct_paths = {path for path, meta in packages.items() if meta.get("name") in direct_names}
-    return direct_paths, name_to_scopes
+    Return the declared scopes for a direct dependency.
 
-
-def _scope_for_package(path: str, packages: Dict[str, Dict[str, Any]], path_to_scopes: Dict[str, Set[str]]) -> Set[str]:
-    """Return the declared scopes for a *direct* package, or an empty set.
-
-    ``path_to_scopes`` is the mapping returned by ``_determine_direct_paths_and_scopes``.
+    The packages parameter is retained for compatibility with the
+    existing graph-engine interface.
     """
-    return path_to_scopes.get(path, set())
-    """Return the declared scopes for a *direct* package, or an empty set.
 
-    ``name_to_scopes`` is the mapping returned by ``_determine_direct_paths_and_scopes``.
+    return path_to_scopes.get(path, set()).copy()
+
+
+# ---------------------------------------------------------------------------
+# npm dependency resolution
+# ---------------------------------------------------------------------------
+
+def _ancestor_paths(start_path: str) -> list[str]:
     """
-    name = packages[path]["name"]
-    return name_to_scopes.get(name, set())
+    Return node_modules directories from nearest to farthest.
 
+    Example:
 
-def _ancestor_paths(start_path: str) -> List[str]:
-    """Yield candidate ``node_modules`` directories for npm resolution.
+        start_path:
+            node_modules/a/node_modules/b
 
-    The function now uses POSIX '/' separator regardless of the host OS, because npm lockfile paths always use forward slashes.
+        Result:
+            1. node_modules/a/node_modules/b/node_modules
+            2. node_modules/a/node_modules
+            3. node_modules
     """
-    # Split on forward slash to handle npm paths on Windows.
-    parts = [p for p in start_path.split('/') if p]
-    candidates: List[str] = []
-    # Current package's node_modules
-    cur = f"{start_path}/node_modules" if start_path else "node_modules"
-    candidates.append(cur)
-    # Walk up the hierarchy
-    while parts:
-        parts.pop()
-        if parts:
-            cur = f"{'/'.join(parts)}/node_modules"
-        else:
-            cur = "node_modules"
-        candidates.append(cur)
-    # Preserve order, deduplicate
-    seen = set()
-    ordered: List[str] = []
-    for c in candidates:
-        if c not in seen:
-            seen.add(c)
-            ordered.append(c)
-    return ordered
-    """Yield candidate ``node_modules`` directories for npm resolution.
 
-    For a package installed at ``start_path`` (e.g. ``node_modules/a/node_modules/b``)
-    the function returns a list of ``node_modules`` directories that npm would search
-    when that package requires another dependency, ordered from nearest to farthest.
+    parts = [part for part in start_path.split("/") if part]
+
+    candidates = [f"{start_path}/node_modules"]
+
+    # Find actual node_modules ancestor directories.
+    for index in range(len(parts) - 1, -1, -1):
+        if parts[index] == "node_modules":
+            candidates.append("/".join(parts[:index + 1]))
+
+    # Remove duplicates without changing search order.
+    return list(dict.fromkeys(candidates))
+
+
+def _find_nearest_install(
+    parent_path: str,
+    dep_name: str,
+    packages: dict[str, dict[str, Any]],
+) -> str | None:
     """
-    parts = [p for p in start_path.split(os.sep) if p]
-    candidates: List[str] = []
-    # Current package's node_modules
-    cur = os.path.join(start_path, "node_modules") if start_path else "node_modules"
-    candidates.append(cur)
-    # Walk up the hierarchy
-    while parts:
-        parts.pop()
-        if parts:
-            cur = os.path.join(os.path.sep.join(parts), "node_modules")
-        else:
-            cur = "node_modules"
-        candidates.append(cur)
-    # Preserve order, deduplicate
-    seen = set()
-    ordered: List[str] = []
-    for c in candidates:
-        if c not in seen:
-            seen.add(c)
-            ordered.append(c)
-    return ordered
+    Find the nearest installed dependency relative to a parent package.
 
-
-def _find_nearest_install(parent_path: str, dep_name: str, packages: Dict[str, Dict[str, Any]]) -> str | None:
-    """Return the *nearest* install path for ``dep_name`` relative to ``parent_path``.
-
-    Implements npm's nearest‑ancestor module resolution.
+    npm searches the closest node_modules directory first, then
+    continues towards the project root.
     """
+
     for candidate_root in _ancestor_paths(parent_path):
         candidate_path = f"{candidate_root}/{dep_name}"
-        if candidate_path in packages:
-            return candidate_path
-    return None
-    """Return the *nearest* install path for ``dep_name`` relative to ``parent_path``.
 
-    Implements npm's nearest‑ancestor module resolution.
-    """
-    for candidate_root in _ancestor_paths(parent_path):
-        candidate_path = os.path.join(candidate_root, dep_name)
         if candidate_path in packages:
             return candidate_path
+
     return None
+
 
 # ---------------------------------------------------------------------------
 # Graph construction
 # ---------------------------------------------------------------------------
 
 def build_dependency_graph(lockfile_path: str | Path) -> Graph:
-    """Construct a directed graph from a ``package-lock.json`` (v2/v3).
-
-    Nodes are identified by their install path (e.g. ``node_modules/foo``).  A
-    synthetic ``<root>`` node acts as the source for direct dependencies.
-    Edge attributes include ``dep_type`` (one of ``prod``, ``dev``, ``optional``
-    or ``peer``) mirroring the declaration location.
     """
+    Build a directed dependency graph from an npm v2/v3 lockfile.
+
+    Every package installation path becomes a separate graph node.
+
+    A synthetic <root> node represents the project itself.
+    """
+
     packages = parse_lockfile(lockfile_path)
-    direct_paths, path_to_scopes = _determine_direct_paths_and_scopes(packages)
+
+    direct_paths, path_to_scopes = (
+        _determine_direct_paths_and_scopes(packages)
+    )
 
     graph = nx.DiGraph()
+
     root_node = "<root>"
+
+    # Add synthetic root.
     graph.add_node(
         root_node,
         name="<root>",
@@ -199,135 +171,279 @@ def build_dependency_graph(lockfile_path: str | Path) -> Graph:
         depth=0,
     )
 
+    # -----------------------------------------------------------------------
     # Add package nodes
+    # -----------------------------------------------------------------------
+
     for path, meta in packages.items():
+
         if path == "":
             continue
+
         node_attrs: NodeAttrs = {
             "name": meta["name"],
             "version": meta["version"],
             "path": path,
             "direct": path in direct_paths,
-            "scope": _scope_for_package(path, packages, path_to_scopes) if path in direct_paths else set(),
+            "scope": (
+                _scope_for_package(path, packages, path_to_scopes)
+                if path in direct_paths
+                else set()
+            ),
             "parents": [],
             "depth": -1,
         }
+
         graph.add_node(path, **node_attrs)
 
-    # Resolve edges, preserving dependency type
+    # -----------------------------------------------------------------------
+    # Resolve package-to-package dependency edges
+    # -----------------------------------------------------------------------
+
+    dependency_sections = (
+        ("dependencies", "prod"),
+        ("devDependencies", "dev"),
+        ("optionalDependencies", "optional"),
+        ("peerDependencies", "peer"),
+    )
+
     for parent_path, meta in packages.items():
+
         if parent_path == "":
             continue
-        for dep_type, dep_map in (
-            ("prod", meta.get("dependencies")),
-            ("dev", meta.get("devDependencies")),
-            ("optional", meta.get("optionalDependencies")),
-            ("peer", meta.get("peerDependencies")),
-        ):
+
+        for section, dep_type in dependency_sections:
+
+            dep_map = meta.get(section, {})
+
             if not isinstance(dep_map, dict):
                 continue
+
             for dep_name in dep_map:
-                child_path = _find_nearest_install(parent_path, dep_name, packages)
+
+                child_path = _find_nearest_install(
+                    parent_path,
+                    dep_name,
+                    packages,
+                )
+
+                # Missing dependencies or unresolved peers are skipped.
                 if child_path is None:
-                    # Unresolved (e.g., missing peer) – skip edge.
                     continue
-                # Merge dependency types if edge already exists
+
+                # Merge dependency types if the same edge is declared
+                # under more than one dependency section.
                 if graph.has_edge(parent_path, child_path):
-                    existing = graph.edges[parent_path, child_path].get('dep_type')
-                    if isinstance(existing, set):
-                        existing.add(dep_type)
-                        graph.edges[parent_path, child_path]['dep_type'] = existing
-                    else:
-                        # Convert to set of types
-                        new_set = {existing, dep_type}
-                        graph.edges[parent_path, child_path]['dep_type'] = new_set
+
+                    existing = graph.edges[parent_path, child_path].get(
+                        "dep_type",
+                        set(),
+                    )
+
+                    if not isinstance(existing, set):
+                        existing = {existing}
+
+                    existing.add(dep_type)
+
+                    graph.edges[parent_path, child_path][
+                        "dep_type"
+                    ] = existing
+
                 else:
-                    graph.add_edge(parent_path, child_path, dep_type={dep_type})
-                graph.nodes[child_path]["parents"].append(parent_path)
 
-    # Connect direct dependencies to synthetic root
+                    graph.add_edge(
+                        parent_path,
+                        child_path,
+                        dep_type={dep_type},
+                    )
+
+                # Record each parent only once.
+                parents = graph.nodes[child_path]["parents"]
+
+                if parent_path not in parents:
+                    parents.append(parent_path)
+
+    # -----------------------------------------------------------------------
+    # Connect direct dependencies to the synthetic root
+    # -----------------------------------------------------------------------
+
     for path in direct_paths:
-        if path in graph:
-            # Add root edge only if the package has no other incoming edges (i.e., no parents yet)
-            if not graph.nodes[path]["parents"]:
-                edge_type = path_to_scopes.get(path, {"prod"})
-                graph.add_edge(root_node, path, dep_type=edge_type)
-                graph.nodes[path]["parents"].append(root_node)
 
+        if path not in graph:
+            continue
 
+        edge_types = path_to_scopes.get(path, {"prod"})
 
-    # ---------------------------------------------------------------
-    # Scope propagation – iterative until stable (handles multiple parents)
-    # ---------------------------------------------------------------
+        graph.add_edge(
+            root_node,
+            path,
+            dep_type=set(edge_types),
+        )
+
+        parents = graph.nodes[path]["parents"]
+
+        if root_node not in parents:
+            parents.append(root_node)
+
+    # -----------------------------------------------------------------------
+    # Scope propagation
+    # -----------------------------------------------------------------------
+
+    """
+    A direct dependency can belong to multiple scopes.
+
+    Example:
+
+        Root
+          |
+          | dev
+          v
+          A
+          |
+          v
+          B
+
+    B inherits the dev scope from A.
+
+    If B is also reachable through a production dependency,
+    B will contain both prod and dev scopes.
+
+    We repeat propagation until no node receives a new scope.
+    """
+
     changed = True
+
     while changed:
+
         changed = False
-        for parent, child, data in graph.edges(data=True):
+
+        for parent, child, _ in graph.edges(data=True):
+
             parent_scope = graph.nodes[parent]["scope"]
             child_scope = graph.nodes[child]["scope"]
+
             new_scope = child_scope.union(parent_scope)
+
             if new_scope != child_scope:
+
                 graph.nodes[child]["scope"] = new_scope
                 changed = True
 
-    # Compute depth (shortest path from root)
+    # -----------------------------------------------------------------------
+    # Compute shortest dependency depth from root
+    # -----------------------------------------------------------------------
+
     for node in graph.nodes:
+
         if node == root_node:
             continue
+
         try:
-            depth = nx.shortest_path_length(graph, source=root_node, target=node)
+            depth = nx.shortest_path_length(
+                graph,
+                source=root_node,
+                target=node,
+            )
+
         except nx.NetworkXNoPath:
             depth = -1
+
         graph.nodes[node]["depth"] = depth
 
     return graph
+
 
 # ---------------------------------------------------------------------------
 # Query helpers
 # ---------------------------------------------------------------------------
 
-def list_all_nodes(graph: Graph) -> List[NodeAttrs]:
-    """Return a list of node attribute dictionaries (excluding the synthetic root)."""
-    return [attrs for nid, attrs in graph.nodes(data=True) if nid != "<root>"]
+def list_all_nodes(graph: Graph) -> list[NodeAttrs]:
+    """
+    Return all package node attributes, excluding the synthetic root.
+    """
+
+    return [
+        attrs
+        for node_id, attrs in graph.nodes(data=True)
+        if node_id != "<root>"
+    ]
 
 
 def get_node_info(graph: Graph, node_id: str) -> NodeAttrs:
-    """Retrieve the attribute dict for a given node identifier.
-
-    Raises ``KeyError`` if the node does not exist.
     """
+    Retrieve attributes for a package node.
+
+    Raises:
+        KeyError: If the requested node does not exist.
+    """
+
     if node_id not in graph:
-        raise KeyError(f"Node {node_id!r} not found in dependency graph")
+        raise KeyError(
+            f"Node {node_id!r} not found in dependency graph"
+        )
+
     return graph.nodes[node_id]
 
 
-def get_all_paths(graph: Graph, target_node: str, limit: int = 1000) -> List[List[str]]:
-    """Return up to ``limit`` simple paths from the synthetic root to ``target_node``.
-
-    ``nx.all_simple_paths`` yields an iterator; we manually stop after ``limit``
-    paths to avoid exponential blow‑up.
+def get_all_paths(
+    graph: Graph,
+    target_node: str,
+    limit: int = 1000,
+) -> list[list[str]]:
     """
+    Return up to `limit` simple paths from root to a target package.
+
+    The limit prevents excessive path enumeration in large graphs.
+    """
+
     root = "<root>"
+
     if target_node not in graph:
-        raise KeyError(f"Target node {target_node!r} not in graph")
-    paths: List[List[str]] = []
-    for i, path in enumerate(nx.all_simple_paths(graph, source=root, target=target_node)):
-        if i >= limit:
+        raise KeyError(
+            f"Target node {target_node!r} not in graph"
+        )
+
+    if limit <= 0:
+        return []
+
+    paths: list[list[str]] = []
+
+    for path in nx.all_simple_paths(
+        graph,
+        source=root,
+        target=target_node,
+    ):
+
+        if len(paths) >= limit:
             break
+
         paths.append(path)
+
     return paths
 
+
 # ---------------------------------------------------------------------------
-# Example entry‑point (manual testing)
+# Manual testing
 # ---------------------------------------------------------------------------
-if __name__ == "__main__":  # pragma: no cover
+
+if __name__ == "__main__":
+
     import sys
 
     if len(sys.argv) != 2:
-        print("Usage: python -m app.services.graph_engine <package-lock.json>")
+        print(
+            "Usage: python -m app.services.graph_engine "
+            "<package-lock.json>"
+        )
         sys.exit(1)
 
-    g = build_dependency_graph(sys.argv[1])
-    print(f"Graph built – {g.number_of_nodes()} nodes, {g.number_of_edges()} edges")
-    for n in list_all_nodes(g)[:5]:
-        print(n)
+    graph = build_dependency_graph(sys.argv[1])
+
+    print(
+        f"Graph built – {graph.number_of_nodes()} nodes, "
+        f"{graph.number_of_edges()} edges"
+    )
+
+    for node in list_all_nodes(graph)[:5]:
+        print(node)
+

@@ -1,130 +1,244 @@
-"""npm lockfile parser for v2/v3 "packages" format.
 
-The parser extracts a flat mapping of *installation path* → package metadata.
-Each entry contains:
+"""
+npm lockfile parser for package-lock.json v2/v3.
+
+Extracts the packages section into a normalized mapping:
+
+    installation_path -> package metadata
+
+Each package entry contains:
 - name
 - version
-- dependencies (prod)
+- dependencies
 - devDependencies
 - optionalDependencies
 - peerDependencies
-- any other fields are ignored for the graph construction.
+
+Other package metadata is ignored by the graph engine.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Any
+
 
 class LockfileParseError(RuntimeError):
-    """Raised when the lockfile cannot be parsed or lacks required fields."""
+    """Raised when a lockfile is invalid or lacks required fields."""
 
 
-def load_lockfile(lock_path: str | Path) -> Dict[str, Any]:
-    """Load a ``package-lock.json`` file and return the parsed JSON.
+# ---------------------------------------------------------------------------
+# Load lockfile
+# ---------------------------------------------------------------------------
 
-    Parameters
-    ----------
-    lock_path:
-        Path to the lockfile.
-
-    Returns
-    -------
-    dict
-        Parsed JSON object.
+def load_lockfile(lock_path: str | Path) -> dict[str, Any]:
     """
-    p = Path(lock_path)
-    if not p.is_file():
-        raise FileNotFoundError(f"Lockfile not found: {p}")
+    Read and parse a package-lock.json file.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        LockfileParseError: If the JSON is invalid or unreadable.
+    """
+
+    path = Path(lock_path)
+
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Lockfile not found: {path}"
+        )
+
     try:
-        with p.open("r", encoding="utf-8") as f:
-            return json.load(f)
-    except json.JSONDecodeError as exc:
-        raise LockfileParseError(f"Invalid JSON in {p}: {exc}") from exc
+
+        with path.open("r", encoding="utf-8") as file:
+            data = json.load(file)
+
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+
+        raise LockfileParseError(
+            f"Invalid JSON in {path}: {exc}"
+        ) from exc
+
+    if not isinstance(data, dict):
+        raise LockfileParseError(
+            "Lockfile must contain a JSON object"
+        )
+
+    return data
 
 
-def _extract_packages(data: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-    """Return the ``packages`` dict from the lockfile.
+# ---------------------------------------------------------------------------
+# Extract packages section
+# ---------------------------------------------------------------------------
 
-    npm v2/v3 lockfiles contain a top‑level ``packages`` key where each key is
-    an installation path ("" for the project root, "node_modules/foo" for a direct
-    dependency, etc.).
+def _extract_packages(
+    data: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
     """
+    Extract the top-level packages mapping.
+
+    npm v2/v3 lockfiles contain installation paths as keys.
+
+    Examples:
+        ""
+        "node_modules/express"
+        "node_modules/express/node_modules/debug"
+        "node_modules/@scope/package"
+    """
+
+    if not isinstance(data, dict):
+        raise LockfileParseError(
+            "Lockfile must contain a JSON object"
+        )
+
     packages = data.get("packages")
+
     if not isinstance(packages, dict):
-        raise LockfileParseError("Lockfile is missing a top‑level 'packages' mapping")
+        raise LockfileParseError(
+            "Lockfile is missing a top-level 'packages' mapping"
+        )
+
     return packages
 
 
-def parse_packages(packages: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-    """Normalise package entries.
+# ---------------------------------------------------------------------------
+# Normalize package entries
+# ---------------------------------------------------------------------------
 
-    The function guarantees that each returned entry contains at least the
-    fields ``name`` and ``version``.  Missing optional fields are replaced with an
-    empty dict.
+def _infer_package_name(path: str) -> str:
     """
-    normalised: Dict[str, Dict[str, Any]] = {}
+    Infer a package name from its installation path.
+
+    Examples:
+        node_modules/express -> express
+        node_modules/@scope/pkg -> @scope/pkg
+        node_modules/a/node_modules/debug -> debug
+    """
+
+    parts = [
+        part
+        for part in path.split("/")
+        if part
+    ]
+
+    name_parts: list[str] = []
+
+    # Use the last node_modules segment.
+    for index, part in enumerate(parts):
+
+        if part == "node_modules" and index + 1 < len(parts):
+            name_parts = parts[index + 1:]
+
+    if not name_parts:
+        raise LockfileParseError(
+            f"Cannot determine package name for path: {path}"
+        )
+
+    return "/".join(name_parts)
+
+
+def parse_packages(
+    packages: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """
+    Normalize package metadata by installation path.
+
+    Missing package names are inferred from installation paths.
+    Missing versions are represented as empty strings.
+    """
+
+    if not isinstance(packages, dict):
+        raise LockfileParseError(
+            "The 'packages' section must be a JSON object"
+        )
+
+    normalized: dict[str, dict[str, Any]] = {}
+
+    dependency_fields = (
+        "dependencies",
+        "devDependencies",
+        "optionalDependencies",
+        "peerDependencies",
+    )
+
     for path, meta in packages.items():
-        if not isinstance(meta, dict):
-            continue
-        # Derive a fallback name from the installation path when "name" is missing.
-        # npm lockfile paths always use forward slashes.
+
+        if not isinstance(path, str) or not isinstance(meta, dict):
+            raise LockfileParseError(
+                "Each package entry must have a string path "
+                "and object metadata"
+            )
+
+        # ---------------------------------------------------------------
+        # Package name
+        # ---------------------------------------------------------------
+
         name = meta.get("name")
-        version = meta.get("version")
+
         if not name:
-            # Path may be "" (root) or something like "node_modules/foo" or "node_modules/@scope/foo"
+
             if path == "":
                 name = "<root>"
+
             else:
-                # Strip leading "node_modules/" and any intermediate "node_modules/" segments.
-                # The last segment is the package name (including scope prefix if present).
-                parts = [p for p in path.split('/') if p]
-                # Find the last part after a "node_modules" component.
-                name_parts = []
-                for i, part in enumerate(parts):
-                    if part == "node_modules" and i + 1 < len(parts):
-                        name_parts = parts[i + 1 :]
-                if not name_parts:
-                    # Fallback to the whole last part.
-                    name = parts[-1]
-                else:
-                    name = "/".join(name_parts)
-        if not version:
-            version = ""
-        normalised[path] = {
-            "name": name,
-            "version": version,
-            "dependencies": meta.get("dependencies", {}),
-            "devDependencies": meta.get("devDependencies", {}),
-            "optionalDependencies": meta.get("optionalDependencies", {}),
-            "peerDependencies": meta.get("peerDependencies", {}),
-        }
+                name = _infer_package_name(path)
 
-        if not isinstance(meta, dict):
-            continue
-        name = meta.get("name")
+        # ---------------------------------------------------------------
+        # Package version
+        # ---------------------------------------------------------------
+
         version = meta.get("version")
-        if not name or not version:
-            # The root entry may omit "name" – we still keep it for completeness.
-            name = name or "<root>"
-            version = version or ""
-        normalised[path] = {
+
+        if version is None:
+            version = ""
+
+        if not isinstance(name, str) or not isinstance(version, str):
+            raise LockfileParseError(
+                f"Invalid name or version for package at {path}"
+            )
+
+        # ---------------------------------------------------------------
+        # Dependency sections
+        # ---------------------------------------------------------------
+
+        entry: dict[str, Any] = {
             "name": name,
             "version": version,
-            "dependencies": meta.get("dependencies", {}),
-            "devDependencies": meta.get("devDependencies", {}),
-            "optionalDependencies": meta.get("optionalDependencies", {}),
-            "peerDependencies": meta.get("peerDependencies", {}),
         }
-    return normalised
+
+        for field in dependency_fields:
+
+            value = meta.get(field, {})
+
+            if not isinstance(value, dict):
+                raise LockfileParseError(
+                    f"Invalid {field} for package at {path}"
+                )
+
+            entry[field] = value
+
+        normalized[path] = entry
+
+    return normalized
 
 
-def parse_lockfile(lock_path: str | Path) -> Dict[str, Dict[str, Any]]:
-    """High‑level helper that returns a mapping ``install_path → package info``.
+# ---------------------------------------------------------------------------
+# Public parser entry point
+# ---------------------------------------------------------------------------
 
-    This is the entry point used by the graph engine.
+def parse_lockfile(
+    lock_path: str | Path,
+) -> dict[str, dict[str, Any]]:
     """
+    Load and normalize an npm package-lock.json file.
+
+    Returns:
+        A mapping of installation path to normalized package metadata.
+    """
+
     data = load_lockfile(lock_path)
+
     packages = _extract_packages(data)
+
     return parse_packages(packages)
+

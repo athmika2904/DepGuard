@@ -1,55 +1,40 @@
+
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
+*.egg-info/
 
 # Virtual environments
 .venv/
-env/
 venv/
-ENV/
+env/
 
-# Distribution / packaging
-build/
-# dist/
-*.egg-info/
-*.egg
+# Environment files and secrets
+.env
+.env.*
+!.env.example
 
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
 
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*,cover
-*.log
+# Frontend build output
+frontend/dist/
+frontend/build/
 
-# Pytest cache
+# Backend generated frontend output
+backend/static/
+
+# Tests and coverage
 .pytest_cache/
+.coverage
+htmlcov/
 
-# MyPy
-.mypy_cache/
-
-# IDEs and editors
-.idea/
+# Editors and operating systems
 .vscode/
-*.sublime-project
-*.sublime-workspace
-
-# OS generated files
+.idea/
 .DS_Store
 Thumbs.db
 
-# Local environment files
-.env
-.env.*
-
-# Custom project artefacts
-brain/
-scratch/

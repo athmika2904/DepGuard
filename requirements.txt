@@ -1,6 +1,10 @@
 fastapi
 uvicorn[standard]
 networkx
-pydantic>=2.0
+pydantic==2.14.1
 pydantic-settings
+httpx
+python-multipart
 pytest
+pytest-asyncio
+semantic-version>=2.10.0,<3.0.0

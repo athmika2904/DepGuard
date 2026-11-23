@@ -1,0 +1,98 @@
+
+
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: 'DM Sans', sans-serif;
+  color: #e8edf8;
+  background: #090e1b;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  min-width: 320px;
+  background:
+    radial-gradient(ellipse at 80% 0%, rgba(91, 75, 190, 0.10), transparent 38%),
+    #090e1b;
+}
+
+h1, h2, h3, h4 {
+  font-family: 'Space Grotesk', sans-serif;
+}
+
+button, input, select {
+  font: inherit;
+}
+
+::selection {
+  background: rgba(139, 124, 255, 0.35);
+}
+
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0c1424;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #35425c;
+  border-radius: 20px;
+}
+
+.panel {
+  @apply rounded-2xl border border-white/[0.07] bg-[#111a2c]/90 shadow-xl shadow-black/10;
+}
+
+.panel-hover {
+  @apply transition duration-300 hover:-translate-y-1 hover:border-violet-400/30 hover:shadow-violet-950/20;
+}
+
+.page-title {
+  @apply text-3xl font-bold tracking-tight text-white;
+}
+
+.page-subtitle {
+  @apply mt-2 text-sm leading-6 text-slate-400;
+}
+
+.eyebrow {
+  @apply text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500;
+}
+
+.input-dark {
+  @apply w-full rounded-xl border border-white/10 bg-[#0b1323] px-4 py-3 text-sm text-white outline-none transition placeholder:text-slate-600 focus:border-violet-400/70 focus:ring-2 focus:ring-violet-400/10;
+}
+
+.button-primary {
+  @apply inline-flex items-center justify-center gap-2 rounded-xl bg-violet-500 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-violet-950/30 transition hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-40;
+}
+
+.button-secondary {
+  @apply inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-slate-300 transition hover:border-violet-400/40 hover:bg-violet-400/10 hover:text-white;
+}
+
+@keyframes soft-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .55; }
+}
+
+.soft-pulse {
+  animation: soft-pulse 2s ease-in-out infinite;
+}
